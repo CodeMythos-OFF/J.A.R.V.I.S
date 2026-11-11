@@ -554,8 +554,10 @@ class JarvisLive:
         except Exception as exc:
             # Fail open for compatibility: keep the existing live-mic behavior
             # if the optional local wake-word model cannot initialize.
+            self.ui.muted = True
             self.ui.write_log(
-                f"SYS: Wake-word model unavailable ({exc}); using live mic mode."
+                f"SYS: Wake-word model unavailable ({exc}); microphone safely muted. "
+                "Use the microphone button for manual live-mic mode."
             )
 
     def _make_remote_key(self):
@@ -847,9 +849,17 @@ class JarvisLive:
             if self._wake_detector is not None:
                 now = time.monotonic()
                 with self._wake_lock:
-                    was_active = self._wake_active and now < self._wake_active_until
-                    if not was_active:
+                    expired = self._wake_active and now >= self._wake_active_until
+                    was_active = self._wake_active and not expired
+                    if expired:
                         self._wake_active = False
+                        self._wake_active_until = 0.0
+                if expired:
+                    loop.call_soon_threadsafe(self.ui.set_state, "SLEEPING")
+                    loop.call_soon_threadsafe(
+                        self.ui.write_log,
+                        "SYS: Listening window ended — say 'Hey JARVIS' to reactivate."
+                    )
                 if not was_active:
                     try:
                         if self._wake_detector.process(indata[:, 0]):
@@ -950,6 +960,7 @@ class JarvisLive:
                                 sleep_phrases = (
                                     "go to sleep", "stop listening", "jarvis sleep",
                                     "stop listening jarvis", "sleep mode",
+                                    "mute microphone", "microphone off",
                                 )
                                 if self._wake_detector is not None and any(
                                     phrase in normalized_command for phrase in sleep_phrases
@@ -957,6 +968,7 @@ class JarvisLive:
                                     with self._wake_lock:
                                         self._wake_active = False
                                         self._wake_active_until = 0.0
+                                    self.ui.set_state("SLEEPING")
                                     self.ui.write_log("SYS: Voice sleep command received.")
                                 self.ui.write_log(f"You: {full_in}")
                                 if self._dashboard:
