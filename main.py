@@ -542,6 +542,21 @@ class JarvisLive:
         self._sys_monitor      = SystemMonitor()  # persistent cooldown state
         self._proactive        = ProactiveEngine()
         self._last_user_speech = time.monotonic()  # updated on every user utterance
+        self._wake_detector = None
+        self._wake_lock = threading.Lock()
+        self._wake_active_until = 0.0
+        self._wake_active = False
+        try:
+            from core.wake_word import WakeWordDetector
+            self._wake_detector = WakeWordDetector()
+            self.ui.write_log("SYS: Local wake word ready — say 'Hey JARVIS'.")
+            self.ui.set_state("SLEEPING")
+        except Exception as exc:
+            # Fail open for compatibility: keep the existing live-mic behavior
+            # if the optional local wake-word model cannot initialize.
+            self.ui.write_log(
+                f"SYS: Wake-word model unavailable ({exc}); using live mic mode."
+            )
 
     def _make_remote_key(self):
         """Called from Qt main thread when user presses Remote Control."""
@@ -823,12 +838,46 @@ class JarvisLive:
         def callback(indata, frames, time_info, status):
             with self._speaking_lock:
                 jarvis_speaking = self._is_speaking
-            if not jarvis_speaking and not self.ui.muted and not self._phone_active:
+            if jarvis_speaking or self.ui.muted or self._phone_active:
+                return
+
+            # Keep the microphone local until the wake phrase is detected.
+            # Only audio captured after activation is sent to Gemini Live.
+            should_stream = self._wake_detector is None
+            if self._wake_detector is not None:
+                now = time.monotonic()
+                with self._wake_lock:
+                    was_active = self._wake_active and now < self._wake_active_until
+                    if not was_active:
+                        self._wake_active = False
+                if not was_active:
+                    try:
+                        if self._wake_detector.process(indata[:, 0]):
+                            with self._wake_lock:
+                                self._wake_active = True
+                                self._wake_active_until = now + 18.0
+                            loop.call_soon_threadsafe(self.ui.set_state, "LISTENING")
+                            loop.call_soon_threadsafe(
+                                self.ui.write_log,
+                                "SYS: Wake phrase detected — listening for your command."
+                            )
+                    except Exception as exc:
+                        loop.call_soon_threadsafe(
+                            self.ui.write_log,
+                            f"ERR: Wake-word detection failed: {exc}"
+                        )
+                    return
+                should_stream = True
+
+            if should_stream:
                 data = indata.tobytes()
-                loop.call_soon_threadsafe(
-                    self.out_queue.put_nowait,
-                    {"data": data, "mime_type": "audio/pcm"}
-                )
+                try:
+                    loop.call_soon_threadsafe(
+                        self.out_queue.put_nowait,
+                        {"data": data, "mime_type": "audio/pcm"}
+                    )
+                except asyncio.QueueFull:
+                    pass
 
         try:
             with sd.InputStream(
@@ -879,6 +928,9 @@ class JarvisLive:
                             if txt:
                                 in_buf.append(txt)
                                 self._last_user_speech = time.monotonic()
+                                if self._wake_detector is not None:
+                                    with self._wake_lock:
+                                        self._wake_active_until = time.monotonic() + 18.0
 
                         if sc.turn_complete:
                             if self._turn_done_event:
@@ -894,6 +946,18 @@ class JarvisLive:
 
                             full_in = " ".join(in_buf).strip()
                             if full_in:
+                                normalized_command = re.sub(r"[^a-z0-9 ]", "", full_in.lower())
+                                sleep_phrases = (
+                                    "go to sleep", "stop listening", "jarvis sleep",
+                                    "stop listening jarvis", "sleep mode",
+                                )
+                                if self._wake_detector is not None and any(
+                                    phrase in normalized_command for phrase in sleep_phrases
+                                ):
+                                    with self._wake_lock:
+                                        self._wake_active = False
+                                        self._wake_active_until = 0.0
+                                    self.ui.write_log("SYS: Voice sleep command received.")
                                 self.ui.write_log(f"You: {full_in}")
                                 if self._dashboard:
                                     asyncio.create_task(self._dashboard.broadcast({
