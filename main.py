@@ -590,7 +590,12 @@ class JarvisLive:
         if value:
             self.ui.set_state("SPEAKING")
         elif not self.ui.muted:
-            self.ui.set_state("LISTENING")
+            if self._wake_detector is not None:
+                with self._wake_lock:
+                    wake_active = self._wake_active and time.monotonic() < self._wake_active_until
+                self.ui.set_state("LISTENING" if wake_active else "SLEEPING")
+            else:
+                self.ui.set_state("LISTENING")
 
     def interrupt(self) -> None:
         """Stop JARVIS mid-speech: drain queued audio and open mic immediately."""
@@ -1303,7 +1308,10 @@ class JarvisLive:
                     self._interrupted          = False
 
                     print("[JARVIS] Connected.")
-                    self.ui.set_state("LISTENING")
+                    if self._wake_detector is not None:
+                        self.ui.set_state("SLEEPING")
+                    else:
+                        self.ui.set_state("LISTENING")
                     self.ui.write_log("SYS: JARVIS online.")
 
                     if self._dashboard:
