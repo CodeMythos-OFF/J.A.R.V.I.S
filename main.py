@@ -552,8 +552,8 @@ class JarvisLive:
             self.ui.write_log("SYS: Local wake word ready — say 'Hey JARVIS'.")
             self.ui.set_state("SLEEPING")
         except Exception as exc:
-            # Fail open for compatibility: keep the existing live-mic behavior
-            # if the optional local wake-word model cannot initialize.
+            # Fail closed for privacy: require the user to opt into manual live-mic mode
+            # if the local wake-word model cannot initialize.
             self.ui.muted = True
             self.ui.write_log(
                 f"SYS: Wake-word model unavailable ({exc}); microphone safely muted. "
