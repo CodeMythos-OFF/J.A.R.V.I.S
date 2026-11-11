@@ -21,6 +21,16 @@
 
 ### ⚡ Think • Listen • See • Research • Automate • Execute
 
+### 🧪 V4 Beta — Voice Controls
+
+- Say **“Hey JARVIS”** to activate the desktop microphone.
+- Say **“go to sleep”** or **“stop listening”** to return to local wake-word standby.
+- Speak naturally to open apps, navigate/search in a browser, adjust supported volume or brightness settings, and request system status.
+- JARVIS gives a short spoken result after computer actions.
+- The wake phrase is detected locally with openWakeWord. Microphone audio is forwarded to Gemini Live only after wake detection.
+- On first launch, openWakeWord may download its pretrained model. If it cannot initialize, the microphone stays muted; use the on-screen microphone control for manual live-mic mode.
+
+
 </div>
 
 ---
